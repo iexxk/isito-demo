@@ -1,0 +1,105 @@
+def get_cicd_sequence() {
+    return "LAB-" + env.BRANCH_NAME.replace("/","_") + "-" + env.BUILD_NUMBER
+}
+
+pipeline {
+
+    agent {
+        node {
+            label 'maven'
+        }
+    }
+
+    parameters {
+        choice(choices: ['all', 'exxk-api','exxk-service'],description: '选择部署的模块：all,exxk-api,exxk-service',name: 'MDL_NAME' )
+    }
+
+    environment {
+        HARBOR_CREDENTIAL_ID = 'harbor'
+        LAB_KUBECONFIG_CREDENTIAL_ID = 'lab-kubeconfig'
+        CICD_REGISTRY = 'harbor.bluemoon.com.cn'
+        HARBOR_NAMESPACE = 'cd-lab-1'
+        CHARTS_REPO = 'https://iexxk.github.io/helm-charts'
+        CHARTS_NAME = 'springboot-app'
+        HELM_VER = '-v1'
+        HISTORY_MAX = 5
+        //镜像库项目空间
+        CICD_SEQUENCE = get_cicd_sequence()
+        //MDL_SCRIPT = get_model_script()
+    }
+
+    stages {
+        stage('checkout scm') {
+            steps {
+                checkout(scm)
+            }
+        }
+
+        stage('login') {
+            steps {
+                container('maven') {
+                    withCredentials([usernamePassword(passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME', credentialsId: "$HARBOR_CREDENTIAL_ID",)]) {
+                        sh 'echo "$DOCKER_PASSWORD" | docker login $CICD_REGISTRY -u "$DOCKER_USERNAME" --password-stdin'
+                    }
+                }
+            }
+        }
+        stage('compile') {
+            steps {
+                container('maven') {
+                    sh """
+                        mvn -U -Dmaven.test.skip=true clean package
+                    """
+                }
+            }
+        }
+
+        stage('push') {
+            parallel {
+                stage('push-1') {
+                    when {
+                        expression { return params.MDL_NAME == 'exxk-api' || params.MDL_NAME == 'all'  }
+                    }
+                    steps {
+                        container('maven'){
+                            withCredentials([kubeconfigContent(credentialsId: "$LAB_KUBECONFIG_CREDENTIAL_ID", variable: 'kubeconfig')]) {
+                                sh """
+                                docker build --no-cache=true -f ./deploy/Dockerfile -t $CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-api:$CICD_SEQUENCE ./api
+                                docker push  $CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-api:$CICD_SEQUENCE
+                                """
+                                sh 'mkdir -p ~/.kube && echo "$kubeconfig" > ~/.kube/config'
+                                sh '''
+                                 echo "==================================开始Helm部署=================================="
+                                 CURRENT_IMAGE=`helm3 get values -n cd-dev-1 exxk-provider$HELM_VER | grep repository | awk -F ': ' '{print \\$2}' `
+                                 helm3 upgrade --install --history-max=$HISTORY_MAX exxk-api$HELM_VER $CHARTS_REPO/$CHARTS_NAME -n exxk-lab -f z-k8s-helm/uat/val-exxk-provider.yaml --set image.repository=$CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-provider:$CICD_SEQUENCE,currentImage=$CURRENT_IMAGE
+                                '''
+                            }
+                        }
+                    }
+                }
+                stage('push-2') {
+                            when {
+                                expression { return params.MDL_NAME == 'exxk-service' || params.MDL_NAME == 'all'  }
+                            }
+                            steps {
+                                container('maven'){
+                                    withCredentials([kubeconfigContent(credentialsId: "$LAB_KUBECONFIG_CREDENTIAL_ID", variable: 'kubeconfig')]) {
+                                        sh """
+                                        docker build --no-cache=true -f ./deploy/Dockerfile -t $CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-service:$CICD_SEQUENCE ./service
+                                        docker push  $CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-service:$CICD_SEQUENCE
+                                        """
+                                        sh 'mkdir -p ~/.kube && echo "$kubeconfig" > ~/.kube/config'
+                                        sh '''
+                                         echo "==================================开始Helm部署=================================="
+                                         CURRENT_IMAGE=`helm3 get values -n cd-dev-1 exxk-consumer$HELM_VER | grep repository | awk -F ': ' '{print \\$2}' `
+                                         helm3 upgrade --install --history-max=$HISTORY_MAX exxk-service$HELM_VER $CHARTS_REPO/$CHARTS_NAME -n exxk-lab -f z-k8s-helm/uat/val-exxk-consumer.yaml --set image.repository=$CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-consumer:$CICD_SEQUENCE,currentImage=$CURRENT_IMAGE
+                                        '''
+                                    }
+                                }
+                            }
+                        }
+            }
+        }
+    }
+
+}
