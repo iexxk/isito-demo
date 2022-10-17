@@ -71,7 +71,7 @@ pipeline {
                                 sh '''
                                  echo "==================================开始Helm部署=================================="
                                  CURRENT_IMAGE=`helm3 get values -n cd-dev-1 exxk-provider$HELM_VER | grep repository | awk -F ': ' '{print \\$2}' `
-                                 helm3 upgrade --install --history-max=$HISTORY_MAX exxk-api$HELM_VER $CHARTS_REPO/$CHARTS_NAME -n exxk-lab -f z-k8s-helm/uat/val-exxk-provider.yaml --set image.repository=$CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-provider:$CICD_SEQUENCE,currentImage=$CURRENT_IMAGE
+                                 helm3 upgrade --install --history-max=$HISTORY_MAX exxk-api$HELM_VER $CHARTS_REPO/$CHARTS_NAME-0.1.0 -n exxk-lab -f z-k8s-helm/uat/val-exxk-provider.yaml --set image.repository=$CICD_REGISTRY/$HARBOR_NAMESPACE/exxk-provider:$CICD_SEQUENCE,currentImage=$CURRENT_IMAGE
                                 '''
                             }
                         }
